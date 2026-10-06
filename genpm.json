@@ -1,0 +1,42 @@
+{
+  "$": 1,
+  "n": "@core/suppliers",
+  "v": "1.0.0",
+  "s": {
+    "en": "Dropshipping suppliers: import products priced by rules, sync cost and stock, forward paid orders, tracking and exceptions",
+    "es": "Proveedores de dropshipping: importar productos con precio por reglas, sincronizar coste y stock, reenviar pedidos y seguimiento",
+    "pt-BR": "Fornecedores de dropshipping: importar produtos com preço por regras, sincronizar custo e estoque, repassar pedidos e rastreio",
+    "fr": "Fournisseurs dropshipping : import de produits tarifés par règles, sync coût et stock, transfert des commandes, suivi",
+    "de": "Dropshipping-Lieferanten: Produktimport mit Preisregeln, Kosten- und Bestandssync, Bestellweiterleitung, Tracking",
+    "ja": "ドロップシッピング仕入先：ルール価格での商品取込、原価・在庫同期、支払済み注文の転送、追跡、例外処理",
+    "zh-CN": "代发货供应商：按规则定价导入商品、同步成本和库存、转发已付订单、物流跟踪和异常队列",
+    "ko": "드롭시핑 공급사: 규칙 가격으로 상품 가져오기, 원가·재고 동기화, 결제 주문 전달, 배송 추적, 예외 처리"
+  },
+  "d": "src/lib/suppliers",
+  "l": "MIT",
+  "k": [
+    "dropshipping",
+    "suppliers",
+    "ecommerce",
+    "fulfillment",
+    "import"
+  ],
+  "g": {
+    "@core/catalog": "^1.0.0",
+    "@core/orders": "^1.0.0",
+    "@core/pricing": "^1.0.0",
+    "@core/jobs": "^1.0.0",
+    "@core/media": "^1.0.0",
+    "@core/email": "^1.0.1",
+    "@core/money": "^1.0.0",
+    "@core/rich-text": "^1.0.0",
+    "@core/db": "^1.0.0",
+    "@core/contracts": "^1.0.0"
+  },
+  "p": {
+    "zod": "^4.0.0"
+  },
+  "e": [
+    "SUPPLIER_COST_ALERT_PCT"
+  ]
+}
