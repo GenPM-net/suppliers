@@ -44,7 +44,11 @@ export interface SupplierAdapter {
   getProduct?(supplier: Supplier, externalProductId: string): Promise<ExternalProduct | null>;
   /** Coste y stock actuales de muchas variantes a la vez. */
   syncVariants?(supplier: Supplier, externalVariantIds: string[]): Promise<Array<{ externalVariantId: string; cost: Money; stock: number | null }>>;
-  placeOrder(supplier: Supplier, order: SupplierOrderRequest): Promise<{ externalRef: string }>;
+  /**
+   * Crea el pedido en el proveedor. Lanza SOLO si el pedido no se creó (se reintentará); usa `order.reference` como
+   * clave de idempotencia si la API la admite, y pasa `opts.signal` a fetch() (se aborta al vencer el tiempo).
+   */
+  placeOrder(supplier: Supplier, order: SupplierOrderRequest, opts?: { signal?: AbortSignal }): Promise<{ externalRef: string }>;
   getTracking?(supplier: Supplier, externalRef: string): Promise<TrackingInfo | null>;
 }
 

@@ -1,7 +1,7 @@
 {
   "$": 1,
   "n": "@core/suppliers",
-  "v": "1.0.0",
+  "v": "1.1.0",
   "s": {
     "en": "Dropshipping suppliers: import products priced by rules, sync cost and stock, forward paid orders, tracking and exceptions",
     "es": "Proveedores de dropshipping: importar productos con precio por reglas, sincronizar coste y stock, reenviar pedidos y seguimiento",

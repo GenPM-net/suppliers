@@ -48,7 +48,7 @@ export const supplierOrders = pgTable(
     supplierId: text('supplier_id')
       .notNull()
       .references(() => suppliers.id),
-    status: text('status', { enum: ['pending_approval', 'queued', 'sent', 'shipped', 'failed', 'cancelled'] }).notNull(),
+    status: text('status', { enum: ['pending_approval', 'queued', 'sending', 'sent', 'shipped', 'failed', 'cancelled'] }).notNull(),
     lines: jsonb('lines').$type<Array<{ orderLineId: string; externalVariantId: string; quantity: number }>>().notNull(),
     externalRef: text('external_ref'),
     error: text('error'),
@@ -62,7 +62,7 @@ export const supplierExceptions = pgTable(
   'supplier_exceptions',
   {
     id: primaryId('sex'),
-    type: text('type', { enum: ['out_of_stock', 'cost_increase', 'negative_margin', 'forward_failed', 'tracking_stalled', 'sync_failed'] }).notNull(),
+    type: text('type', { enum: ['out_of_stock', 'cost_increase', 'negative_margin', 'forward_failed', 'tracking_stalled', 'sync_failed', 'fx_rates_missing'] }).notNull(),
     supplierId: text('supplier_id'),
     variantId: text('variant_id'),
     orderId: text('order_id'),

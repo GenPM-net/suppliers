@@ -1,6 +1,6 @@
 // Dropshipping: importar productos del proveedor al catálogo (precio por reglas), sincronizar coste y stock, reenviar
 // pedidos pagados y traer el seguimiento. Lo que no se puede automatizar acaba en `supplier_exceptions`.
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { createProduct, getProductById, productVariants, products } from '../catalog/index.ts';
 import { type Executor, getDb } from '../db/index.ts';
@@ -52,12 +52,45 @@ export async function exception(type: (typeof supplierExceptions.$inferInsert)['
 
 export type FxRates = { base: string; rates: Record<string, number> };
 
+const FxRatesSchema = z.object({ base: z.string().regex(/^[A-Z]{3}$/), rates: z.record(z.string().regex(/^[A-Z]{3}$/), z.number().positive()) });
+let fxProvider: (() => Promise<FxRates | null> | FxRates | null) | null = null;
+
+/**
+ * Fuente de tipos de cambio para la sincronización programada (p. ej. una API de tipos o una tabla propia). Sin ella
+ * se usa `SUPPLIER_FX_RATES` (JSON `{"base":"EUR","rates":{"USD":1.08}}`) si está definida.
+ */
+export function setFxRatesProvider(fn: (() => Promise<FxRates | null> | FxRates | null) | null): void {
+  fxProvider = fn;
+}
+
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Tipos de cambio actuales (proveedor registrado o `SUPPLIER_FX_RATES`); undefined si no hay. */
+export async function currentFxRates(): Promise<FxRates | undefined> {
+  if (fxProvider) return (await fxProvider()) ?? undefined;
+  const raw = process.env.SUPPLIER_FX_RATES;
+  if (!raw) return undefined;
+  const parsed = FxRatesSchema.safeParse(parseJson(raw));
+  if (!parsed.success) throw new SupplierError('invalid', 'SUPPLIER_FX_RATES must be JSON like {"base":"EUR","rates":{"USD":1.08}}');
+  return parsed.data;
+}
+
 /** Coste del proveedor en la moneda de la tienda (con tipos de cambio si son distintas). */
 function storeCost(cost: Money, rates?: FxRates): Money {
   const store = process.env.STORE_CURRENCY ?? 'EUR';
   if (cost.currency === store) return cost;
   if (!rates) throw new SupplierError('currency', `supplier cost is in ${cost.currency}; pass exchange rates to convert to ${store}`);
-  return convert(cost, store, rates);
+  try {
+    return convert(cost, store, rates);
+  } catch (e) {
+    throw new SupplierError('currency', e instanceof Error ? e.message : String(e));
+  }
 }
 
 /**
@@ -134,7 +167,9 @@ const costAlertPct = () => Number(process.env.SUPPLIER_COST_ALERT_PCT ?? 10);
 
 /**
  * Sincroniza coste y stock con el proveedor. Si el coste cambia, reprecia con las reglas; si el margen queda negativo,
- * pasa el producto a borrador y crea una excepción (nunca vende con pérdida en silencio).
+ * pasa el producto a borrador y crea una excepción (nunca vende con pérdida en silencio). Si el coste cambió en otra
+ * moneda y no hay tipo de cambio, tampoco se sigue vendiendo con el coste viejo: el producto se pausa con una
+ * excepción `fx_rates_missing` y el coste se vuelve a comprobar en la siguiente sincronización.
  */
 export async function syncSupplier(supplierId: string, opts: { rates?: FxRates } = {}, db = getDb()): Promise<{ updated: number; paused: number }> {
   const supplier = await supplierById(supplierId, db);
@@ -151,16 +186,26 @@ export async function syncSupplier(supplierId: string, opts: { rates?: FxRates }
     return { updated, paused };
   }
   const touchedProducts = new Set<string>();
+  const noRate = new Map<string, string>(); // variante → moneda sin tipo de cambio
   for (const f of fresh) {
     const m = mapped.find((x) => x.externalVariantId === f.externalVariantId);
     if (!m) continue;
     const changes: Partial<typeof productVariants.$inferInsert> = {};
     if (f.stock !== null) changes.stock = Math.max(0, f.stock);
-    if (f.cost.amount !== m.cost) {
-      const pct = m.cost ? ((f.cost.amount - m.cost) * 100) / m.cost : 100;
-      if (pct >= costAlertPct()) await exception('cost_increase', `Cost rose ${pct.toFixed(1)}%`, { supplierId, variantId: m.variantId, data: { from: m.cost, to: f.cost.amount } }, db);
-      changes.costAmount = storeCost(f.cost, opts.rates).amount;
-      await db.update(supplierProducts).set({ cost: f.cost.amount }).where(eq(supplierProducts.variantId, m.variantId));
+    if (f.cost.amount !== m.cost || f.cost.currency !== m.currency) {
+      let cost: Money | null = null;
+      try {
+        cost = storeCost(f.cost, opts.rates);
+      } catch (e) {
+        if (!(e instanceof SupplierError && e.code === 'currency')) throw e;
+        noRate.set(m.variantId, f.cost.currency);
+      }
+      if (cost) {
+        const pct = m.cost ? ((f.cost.amount - m.cost) * 100) / m.cost : 100;
+        if (pct >= costAlertPct()) await exception('cost_increase', `Cost rose ${pct.toFixed(1)}%`, { supplierId, variantId: m.variantId, data: { from: m.cost, to: f.cost.amount } }, db);
+        changes.costAmount = cost.amount;
+        await db.update(supplierProducts).set({ cost: f.cost.amount, currency: f.cost.currency }).where(eq(supplierProducts.variantId, m.variantId));
+      }
     }
     await db.update(supplierProducts).set({ lastSyncAt: new Date() }).where(eq(supplierProducts.variantId, m.variantId));
     if (Object.keys(changes).length) {
@@ -168,6 +213,14 @@ export async function syncSupplier(supplierId: string, opts: { rates?: FxRates }
       if (changes.costAmount !== undefined && v) touchedProducts.add(v.productId);
       updated++;
     }
+  }
+  if (noRate.size) {
+    const rows = await db.select({ productId: productVariants.productId }).from(productVariants).where(inArray(productVariants.id, [...noRate.keys()]));
+    const productIds = [...new Set(rows.map((r) => r.productId))];
+    await db.update(products).set({ status: 'draft' }).where(inArray(products.id, productIds));
+    await exception('fx_rates_missing', `Products paused: supplier cost changed in ${[...new Set(noRate.values())].join(', ')} and there is no exchange rate`, { supplierId, data: { productIds, variants: [...noRate.keys()] } }, db);
+    paused += productIds.length;
+    for (const id of productIds) touchedProducts.delete(id);
   }
   for (const productId of touchedProducts) {
     await repriceProduct(productId, { supplierId }, db);
@@ -184,10 +237,26 @@ export async function syncSupplier(supplierId: string, opts: { rates?: FxRates }
   return { updated, paused };
 }
 
-/** Sincronización programada de todos los proveedores activos con API. */
+/**
+ * Sincronización programada de todos los proveedores activos con API, con los tipos de cambio de `currentFxRates`.
+ * Cada proveedor va aparte: si uno falla queda una excepción `sync_failed` y se sigue con los demás.
+ */
 export const syncAllJob = defineJob('suppliers.sync', z.object({}), async () => {
-  const active = await getDb().select().from(suppliers).where(eq(suppliers.status, 'active'));
-  for (const s of active) if (getAdapter(s.adapter).syncVariants) await syncSupplier(s.id);
+  const db = getDb();
+  const active = await db.select().from(suppliers).where(eq(suppliers.status, 'active'));
+  let rates: FxRates | undefined;
+  try {
+    rates = await currentFxRates();
+  } catch (e) {
+    await exception('sync_failed', `Exchange rates unavailable: ${e instanceof Error ? e.message : String(e)}`, {}, db);
+  }
+  for (const s of active) {
+    try {
+      if (getAdapter(s.adapter).syncVariants) await syncSupplier(s.id, { rates }, db);
+    } catch (e) {
+      await exception('sync_failed', e instanceof Error ? e.message : String(e), { supplierId: s.id }, db);
+    }
+  }
 }, { timeoutMs: 15 * 60_000, maxAttempts: 2 });
 
 // —— pedidos ——
@@ -230,42 +299,77 @@ export async function approveSupplierOrder(id: string, db: Executor = getDb()): 
 
 export const MAX_FORWARD_ATTEMPTS = 5;
 
-/** Envía el pedido al proveedor. Reintenta con backoff; al agotar intentos queda `failed` con excepción. */
-export const forwardJob = defineJob(
-  'suppliers.forward',
-  z.object({ supplierOrderId: z.string() }),
-  async ({ supplierOrderId }, { attempt }) => {
-    const db = getDb();
-    const [so] = await db.select().from(supplierOrders).where(eq(supplierOrders.id, supplierOrderId));
-    if (!so || so.status !== 'queued') return;
-    const order = await getOrder(so.orderId, db);
-    if (!order || order.status === 'cancelled' || order.status === 'refunded') {
-      await db.update(supplierOrders).set({ status: 'cancelled' }).where(eq(supplierOrders.id, so.id));
+/** El resultado del envío es desconocido (cortado a medias): no se reenvía solo; queda para revisión manual. */
+async function outcomeUnknown(so: SupplierOrder, why: string, db: Executor) {
+  const [row] = await db
+    .update(supplierOrders)
+    .set({ status: 'failed', error: `outcome unknown: ${why}`.slice(0, 500) })
+    .where(and(eq(supplierOrders.id, so.id), eq(supplierOrders.status, 'sending')))
+    .returning();
+  if (row) await exception('forward_failed', `Forwarding was interrupted (${why}); check with the supplier whether the order was received before re-sending`, { supplierId: so.supplierId, orderId: so.orderId, data: { supplierOrderId: so.id, outcome: 'unknown' } }, db);
+}
+
+/** Rechaza en cuanto se aborta `signal`, aunque el adaptador no lo respete. */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return Promise.race([p, new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))]);
+}
+
+/**
+ * Envía un pedido al proveedor como mucho una vez: reclama la fila (`queued → sending`) antes de llamar al adaptador.
+ * Una fila que ya estaba `sending` (intento anterior cortado) nunca se reenvía: pasa a `failed` con excepción, porque
+ * no se sabe si el proveedor la recibió. Un error del adaptador (que solo lanza si el pedido no se creó) vuelve a la
+ * cola hasta agotar intentos; un timeout deja el resultado como desconocido. Se envían las unidades no reembolsadas.
+ */
+export async function forwardSupplierOrder(supplierOrderId: string, ctx: { attempt: number; signal: AbortSignal }, db: Executor = getDb()): Promise<void> {
+  const [so] = await db.select().from(supplierOrders).where(eq(supplierOrders.id, supplierOrderId));
+  if (!so) return;
+  if (so.status === 'sending') return outcomeUnknown(so, 'a previous attempt did not finish', db);
+  if (so.status !== 'queued') return;
+  const order = await getOrder(so.orderId, db);
+  const lines = so.lines.flatMap((l) => {
+    const ol = order?.lines.find((x) => x.id === l.orderLineId);
+    const quantity = ol ? Math.min(l.quantity, ol.quantity - ol.refundedQuantity) : 0;
+    return quantity > 0 ? [{ externalVariantId: l.externalVariantId, quantity }] : [];
+  });
+  if (!order || order.status === 'cancelled' || order.status === 'refunded' || !lines.length) {
+    await db.update(supplierOrders).set({ status: 'cancelled' }).where(and(eq(supplierOrders.id, so.id), eq(supplierOrders.status, 'queued')));
+    return;
+  }
+  const supplier = await supplierById(so.supplierId, db);
+  const [claimed] = await db
+    .update(supplierOrders)
+    .set({ status: 'sending', attempts: sql`${supplierOrders.attempts} + 1` })
+    .where(and(eq(supplierOrders.id, so.id), eq(supplierOrders.status, 'queued')))
+    .returning();
+  if (!claimed) return; // otro proceso lo reclamó
+  try {
+    if (!order.shippingAddress) throw new Error('order has no shipping address');
+    const request = { reference: order.number, email: order.email, address: order.shippingAddress, lines };
+    const { externalRef } = await untilAborted(getAdapter(supplier.adapter).placeOrder(supplier, request, { signal: ctx.signal }), ctx.signal);
+    // También desde `failed`: si un intento dado por perdido acaba llegando, se registra que sí se envió.
+    await db.update(supplierOrders).set({ status: 'sent', externalRef, error: null }).where(and(eq(supplierOrders.id, so.id), inArray(supplierOrders.status, ['sending', 'failed'])));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (ctx.signal.aborted) return outcomeUnknown(claimed, message, db);
+    const final = ctx.attempt >= MAX_FORWARD_ATTEMPTS;
+    await db
+      .update(supplierOrders)
+      .set({ status: final ? 'failed' : 'queued', error: message.slice(0, 500) })
+      .where(and(eq(supplierOrders.id, so.id), eq(supplierOrders.status, 'sending')));
+    if (final) {
+      await exception('forward_failed', message, { supplierId: so.supplierId, orderId: so.orderId, data: { supplierOrderId: so.id } }, db);
       return;
     }
-    const supplier = await supplierById(so.supplierId, db);
-    try {
-      if (!order.shippingAddress) throw new Error('order has no shipping address');
-      const { externalRef } = await getAdapter(supplier.adapter).placeOrder(supplier, {
-        reference: order.number,
-        email: order.email,
-        address: order.shippingAddress,
-        lines: so.lines.map((l) => ({ externalVariantId: l.externalVariantId, quantity: l.quantity })),
-      });
-      await db.update(supplierOrders).set({ status: 'sent', externalRef, error: null, attempts: so.attempts + 1 }).where(eq(supplierOrders.id, so.id));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      const final = attempt >= MAX_FORWARD_ATTEMPTS;
-      await db.update(supplierOrders).set({ attempts: so.attempts + 1, error: message.slice(0, 500), ...(final && { status: 'failed' as const }) }).where(eq(supplierOrders.id, so.id));
-      if (final) {
-        await exception('forward_failed', message, { supplierId: so.supplierId, orderId: so.orderId }, db);
-        return;
-      }
-      throw e;
-    }
-  },
-  { maxAttempts: MAX_FORWARD_ATTEMPTS, timeoutMs: 60_000 },
-);
+    throw e;
+  }
+}
+
+/** Envía el pedido al proveedor (ver `forwardSupplierOrder`). Reintenta con backoff; al agotar intentos, excepción. */
+export const forwardJob = defineJob('suppliers.forward', z.object({ supplierOrderId: z.string() }), ({ supplierOrderId }, ctx) => forwardSupplierOrder(supplierOrderId, ctx), {
+  maxAttempts: MAX_FORWARD_ATTEMPTS,
+  timeoutMs: 60_000,
+});
 
 /** Registra el envío del proveedor en el pedido (@core/orders) con las líneas de ese proveedor. */
 export async function recordSupplierShipment(id: string, tracking: { carrier?: string; trackingNumber?: string; trackingUrl?: string }, db: Executor = getDb()): Promise<SupplierOrder> {

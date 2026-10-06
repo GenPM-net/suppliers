@@ -10,7 +10,7 @@ import { jobs, runDue } from '../jobs/index.ts';
 import * as jobsSchema from '../jobs/schema.ts';
 import * as mediaSchema from '../media/schema.ts';
 import { money } from '../money/index.ts';
-import { createOrder, getOrder } from '../orders/index.ts';
+import { createOrder, getOrder, orderLines } from '../orders/index.ts';
 import * as ordersSchema from '../orders/schema.ts';
 import { upsertPriceRule } from '../pricing/index.ts';
 import * as pricingSchema from '../pricing/schema.ts';
@@ -19,6 +19,7 @@ import * as schema from './schema.ts';
 import {
   approveSupplierOrder,
   deliveryEstimate,
+  forwardSupplierOrder,
   type ExternalProduct,
   importProduct,
   MAX_FORWARD_ATTEMPTS,
@@ -26,11 +27,13 @@ import {
   pollTrackingJob,
   recordSupplierShipment,
   registerAdapter,
+  setFxRatesProvider,
   type SupplierAdapter,
   supplierExceptions,
   supplierOrders,
   supplierProducts,
   suppliersAdminResource,
+  syncAllJob,
   syncSupplier,
   upsertSupplier,
 } from './index.ts';
@@ -39,15 +42,28 @@ let db: Db;
 const sent: EmailMessage[] = [];
 const realFetch = globalThis.fetch;
 const address = { name: 'Ana', line1: 'Calle Mayor 1', city: 'Valencia', postalCode: '46001', country: 'ES' };
-const fake = { costs: new Map<string, number>(), stock: new Map<string, number>(), failOrders: false, tracking: null as null | { trackingNumber: string } };
+const fake = {
+  costs: new Map<string, number>(),
+  stock: new Map<string, number>(),
+  currency: 'EUR',
+  failSync: false,
+  failOrders: false,
+  hang: false,
+  placed: [] as Array<Array<{ externalVariantId: string; quantity: number }>>,
+  tracking: null as null | { trackingNumber: string },
+};
 const fakeApi: SupplierAdapter = {
   name: 'fakeapi',
   imageHosts: ['img.supplier.test'],
-  async syncVariants(_s, ids) {
-    return ids.map((id) => ({ externalVariantId: id, cost: money(fake.costs.get(id) ?? 500, 'EUR'), stock: fake.stock.get(id) ?? 10 }));
+  async syncVariants(s, ids) {
+    if (fake.failSync && s.name === 'Broken') throw new TypeError('cannot read properties of undefined');
+    return ids.map((id) => ({ externalVariantId: id, cost: money(fake.costs.get(id) ?? 500, s.currency === 'EUR' ? 'EUR' : fake.currency), stock: fake.stock.get(id) ?? 10 }));
   },
   async placeOrder(_s, o) {
+    fake.placed.push(o.lines);
     if (fake.failOrders) throw new Error('supplier API down');
+    // Un proveedor que no responde y que además ignora la señal de cancelación.
+    if (fake.hang) return new Promise<never>(() => {});
     return { externalRef: `EXT-${o.reference}` };
   },
   async getTracking() {
@@ -72,7 +88,13 @@ beforeEach(async () => {
   fake.costs.clear();
   fake.stock.clear();
   fake.failOrders = false;
+  fake.failSync = false;
+  fake.hang = false;
+  fake.currency = 'EUR';
+  fake.placed.length = 0;
   fake.tracking = null;
+  setFxRatesProvider(null);
+  delete process.env.SUPPLIER_FX_RATES;
   await upsertCategory({ slug: 'lamps', name: 'Lamps' });
 });
 afterEach(() => {
@@ -186,6 +208,61 @@ describe('order forwarding', () => {
     expect((await db.select().from(supplierOrders))[0]).toMatchObject({ status: 'sent', externalRef: expect.stringMatching(/^EXT-/) });
   });
 
+  it('never re-sends a supplier order whose previous attempt was interrupted; timeouts leave an exception', async () => {
+    const { product } = await importLamp('fakeapi', {}, true);
+    await paidOrderFor(product.variants[0]!.id, product.id);
+    await runDue(); // evento paid → pedido al proveedor en cola
+    fake.hang = true;
+    const [so] = await db.select().from(supplierOrders);
+    const ac = new AbortController();
+    const run = forwardSupplierOrder(so!.id, { attempt: 1, signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20));
+    // Mientras se envía, la fila está reclamada: otro intento simultáneo no la vuelve a mandar.
+    expect((await db.select().from(supplierOrders))[0]!.status).toBe('sending');
+    await forwardSupplierOrder(so!.id, { attempt: 2, signal: new AbortController().signal });
+    expect(fake.placed).toHaveLength(1);
+    ac.abort(new Error('timeout after 60000 ms'));
+    await run;
+    const after = (await db.select().from(supplierOrders))[0]!;
+    expect(after).toMatchObject({ status: 'failed', attempts: 1, error: expect.stringMatching(/^outcome unknown/) });
+    const ex = await db.select().from(supplierExceptions);
+    expect(ex.map((e) => [e.type, e.data])).toEqual([['forward_failed', { supplierOrderId: so!.id, outcome: 'unknown' }]]);
+    await runDue({ now: new Date(Date.now() + 3_600_000) });
+    expect(fake.placed).toHaveLength(1);
+  });
+
+  it('a row left in sending by a crashed worker goes to review instead of being re-sent', async () => {
+    const { product } = await importLamp('fakeapi', {}, true);
+    await paidOrderFor(product.variants[0]!.id, product.id);
+    await runDue();
+    const [so] = await db.select().from(supplierOrders);
+    await db.update(supplierOrders).set({ status: 'sending' });
+    await forwardSupplierOrder(so!.id, { attempt: 2, signal: new AbortController().signal });
+    expect(fake.placed).toHaveLength(0);
+    expect((await db.select().from(supplierOrders))[0]!.status).toBe('failed');
+    expect((await db.select().from(supplierExceptions)).map((e) => e.type)).toEqual(['forward_failed']);
+  });
+
+  it('forwards only the units that were not refunded and cancels when nothing is left', async () => {
+    const { product } = await importLamp();
+    const o = await paidOrderFor(product.variants[0]!.id, product.id, 3);
+    await runDue();
+    const line = (await getOrder(o.id))!.lines[0]!;
+    await db.update(orderLines).set({ refundedQuantity: 1 }).where(eq(orderLines.id, line.id));
+    const [so] = await db.select().from(supplierOrders);
+    await approveSupplierOrder(so!.id);
+    await runDue();
+    expect(sent.find((m) => m.to === 'orders@supplier.test')!.text).toContain('V1 × 2');
+    const o2 = await paidOrderFor(product.variants[0]!.id, product.id, 1);
+    await runDue();
+    await db.update(orderLines).set({ refundedQuantity: 1 }).where(eq(orderLines.orderId, o2.id));
+    const so2 = (await db.select().from(supplierOrders).where(eq(supplierOrders.orderId, o2.id)))[0]!;
+    await approveSupplierOrder(so2.id);
+    await runDue();
+    expect((await db.select().from(supplierOrders).where(eq(supplierOrders.id, so2.id)))[0]!.status).toBe('cancelled');
+    expect(sent.filter((m) => m.to === 'orders@supplier.test')).toHaveLength(1);
+  });
+
   it('polls tracking from the API and flags stalled orders', async () => {
     const { product } = await importLamp('fakeapi', {}, true);
     const o = await paidOrderFor(product.variants[0]!.id, product.id);
@@ -228,5 +305,32 @@ describe('sync', () => {
     const v1 = (await db.select().from(productVariants).where(eq(productVariants.id, product.variants[0]!.id)))[0]!;
     expect(v1.costAmount).toBe(5000);
     await expect(syncSupplier((await upsertSupplier({ name: 'M', adapter: 'manual', currency: 'EUR', config: {} })).id)).rejects.toMatchObject({ code: 'unsupported' });
+  });
+
+  it('the scheduled sync isolates failing suppliers and pauses products whose foreign cost changed without rates', async () => {
+    await upsertPriceRule({ name: 'x2', markupBps: 10000 });
+    await upsertSupplier({ name: 'Broken', adapter: 'fakeapi', currency: 'EUR', config: {} });
+    fake.failSync = true;
+    const usd = await upsertSupplier({ name: 'US', adapter: 'fakeapi', currency: 'USD', config: {} });
+    fake.currency = 'USD';
+    const ext: ExternalProduct = { externalProductId: 'U1', title: 'Cable', description: '', images: [], options: [], variants: [{ externalVariantId: 'U1V', options: {}, cost: money(1080, 'USD'), stock: 5 }] };
+    const { product } = await importProduct(usd.id, ext, { slug: 'cable', status: 'active', rates: { base: 'EUR', rates: { USD: 1.08 } } });
+    fake.costs.set('U1V', 2160);
+    fake.stock.set('U1V', 7);
+    await syncAllJob.enqueue({});
+    await runDue();
+    expect(await db.select().from(jobs).where(eq(jobs.status, 'failed'))).toHaveLength(0);
+    const ex = await db.select().from(supplierExceptions);
+    expect(ex.map((e) => e.type).sort()).toEqual(['fx_rates_missing', 'sync_failed']);
+    const v = (await db.select().from(productVariants).where(eq(productVariants.id, product.variants[0]!.id)))[0]!;
+    expect([v.costAmount, v.stock]).toEqual([1000, 7]); // coste viejo, pero el producto ya no se vende
+    expect((await db.select().from(products).where(eq(products.id, product.id)))[0]!.status).toBe('draft');
+    // Con tipos de cambio (aquí por variable de entorno), el coste se convierte y se reprecia.
+    process.env.SUPPLIER_FX_RATES = JSON.stringify({ base: 'EUR', rates: { USD: 1.08 } });
+    await syncAllJob.enqueue({});
+    await runDue();
+    const v2 = (await db.select().from(productVariants).where(eq(productVariants.id, product.variants[0]!.id)))[0]!;
+    expect([v2.costAmount, v2.priceAmount]).toEqual([2000, 4099]); // 20,00 × 2 = 40,00 → 40,99
+    expect((await db.select().from(supplierExceptions)).filter((e) => e.type === 'fx_rates_missing')).toHaveLength(1);
   });
 });
