@@ -3,7 +3,9 @@ import { count, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AdminContext, AdminResource } from '../contracts/index.js';
 import { getDb } from '../db/index.js';
-import { approveSupplierOrder, recordSupplierShipment, resolveException, SupplierError, SupplierInput, syncSupplier, upsertSupplier } from './suppliers.js';
+import { getAdapter } from './adapter.js';
+import { parseSupplierCsv } from './adapters/manual.js';
+import { approveSupplierOrder, importProduct, recordSupplierShipment, resolveException, SupplierError, SupplierInput, syncSupplier, upsertSupplier } from './suppliers.js';
 import { type Supplier, type SupplierException, type SupplierOrder, supplierExceptions, supplierOrders, suppliers } from './schema.js';
 
 async function need(ctx: AdminContext, perm: string) {
@@ -11,6 +13,23 @@ async function need(ctx: AdminContext, perm: string) {
 }
 const one = async <T>(table: typeof suppliers | typeof supplierOrders | typeof supplierExceptions, id: string) => ((await getDb().select().from(table).where(eq(table.id, id))) as unknown as T[])[0] ?? null;
 const page = (q: { page: number; pageSize: number }) => ({ limit: q.pageSize, offset: (Math.max(q.page, 1) - 1) * q.pageSize });
+
+const ImportOne = z.object({
+  externalProductId: z.string().trim().min(1).max(100),
+  slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(120).optional(),
+  category: z.string().max(80).optional(),
+});
+const ImportCsv = z.object({ csv: z.string().min(1).max(500_000), category: z.string().max(80).optional() });
+
+/** `Taza Térmica 500 ml` → `taza-termica-500-ml`. */
+const slugify = (t: string) =>
+  t
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'product';
 
 export const suppliersAdminResource: AdminResource<Supplier> = {
   name: 'suppliers',
@@ -50,10 +69,48 @@ export const suppliersAdminResource: AdminResource<Supplier> = {
       name: 'sync',
       label: 'Sync costs and stock now',
       permission: 'suppliers:update',
+      available: (s) => !!getAdapter(s.adapter).syncVariants,
       async run(id, _i, ctx) {
         await need(ctx, 'suppliers:update');
         await syncSupplier(id);
         return (await one<Supplier>(suppliers, id))!;
+      },
+    },
+    {
+      name: 'import-product',
+      label: 'Import a product by supplier id',
+      permission: 'products:create',
+      input: ImportOne,
+      available: (s) => !!getAdapter(s.adapter).getProduct,
+      async run(id, input, ctx) {
+        await need(ctx, 'products:create');
+        const i = ImportOne.parse(input);
+        const s = (await one<Supplier>(suppliers, id))!;
+        const ext = await getAdapter(s.adapter).getProduct!(s, i.externalProductId);
+        if (!ext) throw new SupplierError('not_found', `product ${i.externalProductId} not found at ${s.name}`);
+        await importProduct(id, ext, { slug: i.slug ?? slugify(ext.title), ...(i.category && { categories: [i.category] }) });
+        return s;
+      },
+    },
+    {
+      name: 'import-csv',
+      label: 'Import products from CSV',
+      permission: 'products:create',
+      input: ImportCsv,
+      available: (s) => s.adapter === 'manual',
+      async run(id, input, ctx) {
+        await need(ctx, 'products:create');
+        const i = ImportCsv.parse(input);
+        const s = (await one<Supplier>(suppliers, id))!;
+        let products;
+        try {
+          products = parseSupplierCsv(i.csv, s.currency);
+        } catch (e) {
+          throw new SupplierError('invalid', (e as Error).message);
+        }
+        // Siempre como borradores: el equipo revisa textos, imágenes y precios antes de publicar.
+        for (const ext of products) await importProduct(id, ext, { slug: slugify(ext.title), ...(i.category && { categories: [i.category] }) });
+        return s;
       },
     },
   ],

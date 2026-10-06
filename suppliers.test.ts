@@ -30,6 +30,7 @@ import {
   supplierExceptions,
   supplierOrders,
   supplierProducts,
+  suppliersAdminResource,
   syncSupplier,
   upsertSupplier,
 } from './index.js';
@@ -124,6 +125,26 @@ describe('CSV and import', () => {
     await expect(importProduct(usd.id, ext, { slug: 'cable' })).rejects.toMatchObject({ code: 'currency' });
     const { product } = await importProduct(usd.id, ext, { slug: 'cable', rates: { base: 'EUR', rates: { USD: 1.08 } } });
     expect(product.variants[0]).toMatchObject({ costAmount: 1000, priceAmount: 2099 });
+  });
+});
+
+describe('admin import actions', () => {
+  it('imports from CSV as drafts (manual) and offers only the actions the adapter supports', async () => {
+    await upsertPriceRule({ name: 'x2.5', markupBps: 15000 });
+    const manual = await upsertSupplier({ name: 'Acme', adapter: 'manual', currency: 'EUR', config: {} });
+    const api = await upsertSupplier({ name: 'API', adapter: 'fakeapi', currency: 'EUR', config: {} });
+    const ctx = { user: { id: 'u', email: null, name: null }, can: async () => true };
+    const action = (n: string) => suppliersAdminResource.actions!.find((a) => a.name === n)!;
+    expect(action('import-csv').available!(manual)).toBe(true);
+    expect(action('import-csv').available!(api)).toBe(false);
+    expect(action('sync').available!(manual)).toBe(false);
+    expect(action('sync').available!(api)).toBe(true);
+    expect(action('import-product').available!(api)).toBe(false); // fakeapi no implementa getProduct
+    await action('import-csv').run(manual.id, { csv, category: 'lamps' }, ctx);
+    const p = (await getProduct('led-lamp-warm', { includeDraft: true }))!;
+    expect(p).toMatchObject({ status: 'draft', categories: [{ slug: 'lamps', name: 'Lamps' }] });
+    await expect(action('import-csv').run(manual.id, { csv: 'title\nx' }, ctx)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(action('import-csv').run(manual.id, { csv }, { ...ctx, can: async () => false })).rejects.toMatchObject({ code: 'forbidden' });
   });
 });
 
