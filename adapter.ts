@@ -1,7 +1,7 @@
 // Contrato de los adaptadores de proveedor. Cada uno vive en adapters/<nombre>.ts y se registra con `registerAdapter`.
-import type { Money } from '../contracts/index.js';
-import type { Address } from '../orders/index.js';
-import type { Supplier } from './schema.js';
+import type { Money } from '../contracts/index.ts';
+import type { Address } from '../orders/index.ts';
+import type { Supplier } from './schema.ts';
 
 export type ExternalVariant = {
   externalVariantId: string;

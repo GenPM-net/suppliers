@@ -1,21 +1,21 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import * as authSchema from '../auth/schema.js';
-import { getProduct, getProductById, products, productVariants, upsertCategory } from '../catalog/index.js';
-import * as catalogSchema from '../catalog/schema.js';
-import { testDb } from '../db/__fixtures__/pglite.js';
-import type { Db } from '../db/index.js';
-import { type EmailMessage, setEmailProvider } from '../email/index.js';
-import { jobs, runDue } from '../jobs/index.js';
-import * as jobsSchema from '../jobs/schema.js';
-import * as mediaSchema from '../media/schema.js';
-import { money } from '../money/index.js';
-import { createOrder, getOrder } from '../orders/index.js';
-import * as ordersSchema from '../orders/schema.js';
-import { upsertPriceRule } from '../pricing/index.js';
-import * as pricingSchema from '../pricing/schema.js';
-import { backendStorage, memoryBackend, setStorage } from '../storage/index.js';
-import * as schema from './schema.js';
+import * as authSchema from '../auth/schema.ts';
+import { getProduct, getProductById, products, productVariants, upsertCategory } from '../catalog/index.ts';
+import * as catalogSchema from '../catalog/schema.ts';
+import { testDb } from '../db/__fixtures__/pglite.ts';
+import type { Db } from '../db/index.ts';
+import { type EmailMessage, setEmailProvider } from '../email/index.ts';
+import { jobs, runDue } from '../jobs/index.ts';
+import * as jobsSchema from '../jobs/schema.ts';
+import * as mediaSchema from '../media/schema.ts';
+import { money } from '../money/index.ts';
+import { createOrder, getOrder } from '../orders/index.ts';
+import * as ordersSchema from '../orders/schema.ts';
+import { upsertPriceRule } from '../pricing/index.ts';
+import * as pricingSchema from '../pricing/schema.ts';
+import { backendStorage, memoryBackend, setStorage } from '../storage/index.ts';
+import * as schema from './schema.ts';
 import {
   approveSupplierOrder,
   deliveryEstimate,
@@ -33,7 +33,7 @@ import {
   suppliersAdminResource,
   syncSupplier,
   upsertSupplier,
-} from './index.js';
+} from './index.ts';
 
 let db: Db;
 const sent: EmailMessage[] = [];

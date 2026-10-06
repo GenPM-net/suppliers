@@ -1,12 +1,12 @@
 // Panel: proveedores (sincronizar), pedidos a proveedores (aprobar, reintentar, registrar envío) y excepciones.
 import { count, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { AdminContext, AdminResource } from '../contracts/index.js';
-import { getDb } from '../db/index.js';
-import { getAdapter } from './adapter.js';
-import { parseSupplierCsv } from './adapters/manual.js';
-import { approveSupplierOrder, importProduct, recordSupplierShipment, resolveException, SupplierError, SupplierInput, syncSupplier, upsertSupplier } from './suppliers.js';
-import { type Supplier, type SupplierException, type SupplierOrder, supplierExceptions, supplierOrders, suppliers } from './schema.js';
+import type { AdminContext, AdminResource } from '../contracts/index.ts';
+import { getDb } from '../db/index.ts';
+import { getAdapter } from './adapter.ts';
+import { parseSupplierCsv } from './adapters/manual.ts';
+import { approveSupplierOrder, importProduct, recordSupplierShipment, resolveException, SupplierError, SupplierInput, syncSupplier, upsertSupplier } from './suppliers.ts';
+import { type Supplier, type SupplierException, type SupplierOrder, supplierExceptions, supplierOrders, suppliers } from './schema.ts';
 
 async function need(ctx: AdminContext, perm: string) {
   if (!(await ctx.can(perm))) throw new SupplierError('forbidden', `forbidden: ${perm}`);

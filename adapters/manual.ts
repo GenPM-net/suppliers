@@ -1,8 +1,8 @@
 // Adaptador manual: para cualquier proveedor sin API. Productos por CSV, pedidos por email al proveedor y seguimiento
 // introducido en el panel. Configuración: `orderEmail` (a quién se envían los pedidos).
-import { getEmailProvider } from '../../email/index.js';
-import { parseMoney } from '../../money/index.js';
-import { registerAdapter, type ExternalProduct, type SupplierAdapter } from '../adapter.js';
+import { getEmailProvider } from '../../email/index.ts';
+import { parseMoney } from '../../money/index.ts';
+import { registerAdapter, type ExternalProduct, type SupplierAdapter } from '../adapter.ts';
 
 /**
  * CSV con cabecera: `product_id,title,description,image_urls,option1_name,option1_value,option2_name,option2_value,variant_id,cost,stock,weight_grams,ship_min_days,ship_max_days`

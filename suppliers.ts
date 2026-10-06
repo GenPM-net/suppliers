@@ -2,16 +2,16 @@
 // pedidos pagados y traer el seguimiento. Lo que no se puede automatizar acaba en `supplier_exceptions`.
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { createProduct, getProductById, productVariants, products } from '../catalog/index.js';
-import { type Executor, getDb } from '../db/index.js';
-import { defineJob } from '../jobs/index.js';
-import { importRemoteImage } from '../media/index.js';
-import { convert, type Money } from '../money/index.js';
-import { addFulfillment, getOrder, onOrderEvent } from '../orders/index.js';
-import { priceFromCost, repriceProduct, setVariantPrice } from '../pricing/index.js';
-import { docFromText } from '../rich-text/index.js';
-import { type ExternalProduct, getAdapter } from './adapter.js';
-import { type Supplier, type SupplierOrder, supplierExceptions, supplierOrders, supplierProducts, suppliers } from './schema.js';
+import { createProduct, getProductById, productVariants, products } from '../catalog/index.ts';
+import { type Executor, getDb } from '../db/index.ts';
+import { defineJob } from '../jobs/index.ts';
+import { importRemoteImage } from '../media/index.ts';
+import { convert, type Money } from '../money/index.ts';
+import { addFulfillment, getOrder, onOrderEvent } from '../orders/index.ts';
+import { priceFromCost, repriceProduct, setVariantPrice } from '../pricing/index.ts';
+import { docFromText } from '../rich-text/index.ts';
+import { type ExternalProduct, getAdapter } from './adapter.ts';
+import { type Supplier, type SupplierOrder, supplierExceptions, supplierOrders, supplierProducts, suppliers } from './schema.ts';
 
 export class SupplierError extends Error {
   constructor(

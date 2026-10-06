@@ -1,7 +1,7 @@
 // Tablas de @core/suppliers. Las recoge drizzle-kit vía src/lib/db/drizzle.config.ts.
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { productVariants } from '../catalog/index.js';
-import { primaryId, timestamps } from '../db/index.js';
+import { productVariants } from '../catalog/index.ts';
+import { primaryId, timestamps } from '../db/index.ts';
 
 export const suppliers = pgTable('suppliers', {
   id: primaryId('sup'),

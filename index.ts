@@ -1,5 +1,5 @@
 // @core/suppliers — API pública. Al importarlo registra el adaptador manual y el reenvío de pedidos pagados.
-import './adapters/manual.js';
+import './adapters/manual.ts';
 
 export {
   type ExternalProduct,
@@ -9,9 +9,9 @@ export {
   type SupplierAdapter,
   type SupplierOrderRequest,
   type TrackingInfo,
-} from './adapter.js';
-export { manualAdapter, parseCsv, parseSupplierCsv } from './adapters/manual.js';
-export { supplierExceptionsAdminResource, supplierOrdersAdminResource, suppliersAdminResource, suppliersAdminResources } from './admin.js';
+} from './adapter.ts';
+export { manualAdapter, parseCsv, parseSupplierCsv } from './adapters/manual.ts';
+export { supplierExceptionsAdminResource, supplierOrdersAdminResource, suppliersAdminResource, suppliersAdminResources } from './admin.ts';
 export {
   type Supplier,
   type SupplierException,
@@ -20,7 +20,7 @@ export {
   supplierOrders,
   supplierProducts,
   suppliers,
-} from './schema.js';
+} from './schema.ts';
 export {
   approveSupplierOrder,
   createSupplierOrders,
@@ -40,4 +40,4 @@ export {
   syncAllJob,
   syncSupplier,
   upsertSupplier,
-} from './suppliers.js';
+} from './suppliers.ts';
