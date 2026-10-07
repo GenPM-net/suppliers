@@ -42,8 +42,11 @@ export interface SupplierAdapter {
   readonly imageHosts: string[];
   search?(supplier: Supplier, query: string): Promise<Array<{ externalProductId: string; title: string; image?: string; cost: Money }>>;
   getProduct?(supplier: Supplier, externalProductId: string): Promise<ExternalProduct | null>;
-  /** Coste y stock actuales de muchas variantes a la vez. */
-  syncVariants?(supplier: Supplier, externalVariantIds: string[]): Promise<Array<{ externalVariantId: string; cost: Money; stock: number | null }>>;
+  /**
+   * Coste y stock actuales de muchas variantes a la vez. `cost: null` = desconocido (p. ej. el proveedor retiró la
+   * variante): se mantiene el coste guardado y solo se aplica el stock.
+   */
+  syncVariants?(supplier: Supplier, externalVariantIds: string[]): Promise<Array<{ externalVariantId: string; cost: Money | null; stock: number | null }>>;
   /**
    * Crea el pedido en el proveedor. Lanza SOLO si el pedido no se creó (se reintentará); usa `order.reference` como
    * clave de idempotencia si la API la admite, y pasa `opts.signal` a fetch() (se aborta al vencer el tiempo).

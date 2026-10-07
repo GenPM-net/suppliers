@@ -192,7 +192,7 @@ export async function syncSupplier(supplierId: string, opts: { rates?: FxRates }
     if (!m) continue;
     const changes: Partial<typeof productVariants.$inferInsert> = {};
     if (f.stock !== null) changes.stock = Math.max(0, f.stock);
-    if (f.cost.amount !== m.cost || f.cost.currency !== m.currency) {
+    if (f.cost && (f.cost.amount !== m.cost || f.cost.currency !== m.currency)) {
       let cost: Money | null = null;
       try {
         cost = storeCost(f.cost, opts.rates);

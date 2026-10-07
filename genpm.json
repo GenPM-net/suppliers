@@ -1,7 +1,7 @@
 {
   "$": 1,
   "n": "@core/suppliers",
-  "v": "1.1.0",
+  "v": "1.2.0",
   "s": {
     "en": "Dropshipping suppliers: import products priced by rules, sync cost and stock, forward paid orders, tracking and exceptions",
     "es": "Proveedores de dropshipping: importar productos con precio por reglas, sincronizar coste y stock, reenviar pedidos y seguimiento",
@@ -19,7 +19,8 @@
     "suppliers",
     "ecommerce",
     "fulfillment",
-    "import"
+    "import",
+    "cjdropshipping"
   ],
   "g": {
     "@core/catalog": "^1.0.0",
@@ -37,6 +38,8 @@
     "zod": "^4.0.0"
   },
   "e": [
-    "SUPPLIER_COST_ALERT_PCT"
+    "SUPPLIER_COST_ALERT_PCT",
+    "CJ_API_KEY",
+    "CJ_QPS"
   ]
 }

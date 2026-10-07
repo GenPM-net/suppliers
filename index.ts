@@ -1,5 +1,7 @@
-// @core/suppliers — API pública. Al importarlo registra el adaptador manual y el reenvío de pedidos pagados.
+// @core/suppliers — API pública. Al importarlo registra los adaptadores (manual y cj) y el reenvío de
+// pedidos pagados.
 import './adapters/manual.ts';
+import './adapters/cj.ts';
 
 export {
   type ExternalProduct,
@@ -10,6 +12,7 @@ export {
   type SupplierOrderRequest,
   type TrackingInfo,
 } from './adapter.ts';
+export { CjApiError, cjAdapter } from './adapters/cj.ts';
 export { manualAdapter, parseCsv, parseSupplierCsv } from './adapters/manual.ts';
 export { supplierExceptionsAdminResource, supplierOrdersAdminResource, suppliersAdminResource, suppliersAdminResources } from './admin.ts';
 export {
