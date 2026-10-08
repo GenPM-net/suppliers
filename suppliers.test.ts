@@ -45,6 +45,8 @@ const address = { name: 'Ana', line1: 'Calle Mayor 1', city: 'Valencia', postalC
 const fake = {
   costs: new Map<string, number>(),
   stock: new Map<string, number>(),
+  /** Variantes retiradas por el proveedor: coste desconocido y sin stock. */
+  removed: new Set<string>(),
   currency: 'EUR',
   failSync: false,
   failOrders: false,
@@ -57,7 +59,9 @@ const fakeApi: SupplierAdapter = {
   imageHosts: ['img.supplier.test'],
   async syncVariants(s, ids) {
     if (fake.failSync && s.name === 'Broken') throw new TypeError('cannot read properties of undefined');
-    return ids.map((id) => ({ externalVariantId: id, cost: money(fake.costs.get(id) ?? 500, s.currency === 'EUR' ? 'EUR' : fake.currency), stock: fake.stock.get(id) ?? 10 }));
+    return ids.map((id) =>
+      fake.removed.has(id) ? { externalVariantId: id, cost: null, stock: 0 } : { externalVariantId: id, cost: money(fake.costs.get(id) ?? 500, s.currency === 'EUR' ? 'EUR' : fake.currency), stock: fake.stock.get(id) ?? 10 },
+    );
   },
   async placeOrder(_s, o) {
     fake.placed.push(o.lines);
@@ -87,6 +91,7 @@ beforeEach(async () => {
   globalThis.fetch = (async (url: string) => (String(url).startsWith('https://img.supplier.test/') ? new Response(png) : new Response('no', { status: 404 }))) as unknown as typeof fetch;
   fake.costs.clear();
   fake.stock.clear();
+  fake.removed.clear();
   fake.failOrders = false;
   fake.failSync = false;
   fake.hang = false;
@@ -313,6 +318,16 @@ describe('sync', () => {
     const v1 = (await db.select().from(productVariants).where(eq(productVariants.id, product.variants[0]!.id)))[0]!;
     expect(v1.costAmount).toBe(5000);
     await expect(syncSupplier((await upsertSupplier({ name: 'M', adapter: 'manual', currency: 'EUR', config: {} })).id)).rejects.toMatchObject({ code: 'unsupported' });
+  });
+
+  it('a variant the supplier removed (unknown cost) keeps its cost and goes out of stock', async () => {
+    await upsertPriceRule({ name: 'x2.5', markupBps: 15000 });
+    const { supplier, product } = await importLamp('fakeapi');
+    fake.removed.add('V1');
+    await syncSupplier(supplier.id);
+    const v1 = (await db.select().from(productVariants).where(eq(productVariants.id, product.variants[0]!.id)))[0]!;
+    expect([v1.stock, v1.costAmount]).toEqual([0, 720]);
+    expect((await db.select().from(supplierExceptions)).map((e) => e.type)).toEqual([]);
   });
 
   it('the scheduled sync isolates failing suppliers and pauses products whose foreign cost changed without rates', async () => {
