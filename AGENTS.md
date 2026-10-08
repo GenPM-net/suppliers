@@ -16,7 +16,12 @@ order and keep an exceptions queue. Ships the `manual` adapter (CSV import, orde
 1. Install @core/pricing and create at least one price rule. Migrations as in `src/lib/db/AGENTS.md`; the @core/jobs cron must run.
 2. Import this module at startup (registers the manual adapter and the `paid` order handler).
 3. Create a supplier in the admin: adapter `manual`, `config.orderEmail`, currency. API adapters read credentials from env, never from `config`.
-4. Import: `importProduct(supplierId, parseSupplierCsv(csv, currency)[0], { slug, categories })` → review the draft, then publish.
+4. Import: `importProduct(supplierId, parseSupplierCsv(csv, currency)[0], { slug, categories })` (or the supplier's
+   "Import products from CSV" admin action) → review the draft, then publish. CSV header (one row per variant):
+   `product_id,title,description,image_urls,option1_name,option1_value,option2_name,option2_value,variant_id,cost,stock,weight_grams,ship_min_days,ship_max_days`
+   (`image_urls` separated by `|`, https only; `cost` decimal in the supplier currency). Images are copied only from
+   allowed hosts: add the supplier's image domains to its `config.imageHosts` (`cdn.supplier.com,.img.supplier.com`);
+   skipped images open an `images_skipped` exception.
 5. Schedule `syncAllJob` (e.g. every 6 h) and `pollTrackingJob` (every 12 h) with @core/jobs `schedule`. Suppliers
    in another currency need exchange rates for the scheduled sync: `setFxRatesProvider(async () => ({ base, rates }))`
    at startup, or env `SUPPLIER_FX_RATES='{"base":"EUR","rates":{"USD":1.08}}'`. Without them, products whose cost

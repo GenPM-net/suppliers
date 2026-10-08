@@ -62,7 +62,7 @@ export const supplierExceptions = pgTable(
   'supplier_exceptions',
   {
     id: primaryId('sex'),
-    type: text('type', { enum: ['out_of_stock', 'cost_increase', 'negative_margin', 'forward_failed', 'tracking_stalled', 'sync_failed', 'fx_rates_missing'] }).notNull(),
+    type: text('type', { enum: ['out_of_stock', 'cost_increase', 'negative_margin', 'forward_failed', 'tracking_stalled', 'sync_failed', 'fx_rates_missing', 'images_skipped'] }).notNull(),
     supplierId: text('supplier_id'),
     variantId: text('variant_id'),
     orderId: text('order_id'),

@@ -97,6 +97,12 @@ function storeCost(cost: Money, rates?: FxRates): Money {
  * Importa un producto del proveedor como borrador: precio de cada variante por reglas de @core/pricing, imágenes
  * copiadas a @core/media y descripción como texto plano. Revísalo en el panel antes de publicarlo.
  */
+const configHosts = (s: Supplier) =>
+  (s.config.imageHosts ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
 export async function importProduct(
   supplierId: string,
   ext: ExternalProduct,
@@ -114,11 +120,15 @@ export async function importProduct(
     variants.push({ v, cost, quote });
   }
   const media: string[] = [];
+  const skipped: Array<{ url: string; reason: string }> = [];
+  // Hosts permitidos: los del adaptador, los de `config.imageHosts` del proveedor (`cdn.proveedor.com,.img.com`) y los
+  // que pase quien llama. Cualquier otro se omite (anti-SSRF) y queda una excepción para revisarlo.
+  const allowedHosts = [...adapter.imageHosts, ...configHosts(supplier), ...(opts.imageHosts ?? [])];
   for (const url of ext.images.slice(0, 10)) {
     try {
-      media.push((await importRemoteImage(url, { allowedHosts: [...adapter.imageHosts, ...(opts.imageHosts ?? [])], alt: ext.title.slice(0, 200), folder: 'products' }, db)).id);
-    } catch {
-      // Imagen no válida o de un host no permitido: se omite (el panel avisa de productos sin imagen).
+      media.push((await importRemoteImage(url, { allowedHosts, alt: ext.title.slice(0, 200), folder: 'products' }, db)).id);
+    } catch (e) {
+      skipped.push({ url, reason: e instanceof Error ? e.message.slice(0, 200) : String(e) });
     }
   }
   const product = await createProduct(
@@ -160,7 +170,8 @@ export async function importProduct(
     });
     await setVariantPrice(local.id, local.priceAmount, db);
   }
-  return { product: view, belowMinimum: variants.filter((x) => x.quote.belowMinimum).map((x) => x.v.externalVariantId) };
+  if (skipped.length) await exception('images_skipped', `${skipped.length} image(s) not imported: allow their host in the supplier's config.imageHosts`, { supplierId, data: { productId: view.id, images: skipped } }, db);
+  return { product: view, belowMinimum: variants.filter((x) => x.quote.belowMinimum).map((x) => x.v.externalVariantId), skippedImages: skipped.map((x) => x.url) };
 }
 
 const costAlertPct = () => Number(process.env.SUPPLIER_COST_ALERT_PCT ?? 10);

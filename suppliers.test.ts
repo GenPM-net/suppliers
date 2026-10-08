@@ -165,6 +165,14 @@ describe('admin import actions', () => {
     await action('import-csv').run(manual.id, { csv, category: 'lamps' }, ctx);
     const p = (await getProduct('led-lamp-warm', { includeDraft: true }))!;
     expect(p).toMatchObject({ status: 'draft', categories: [{ slug: 'lamps', name: 'Lamps' }] });
+    // Sin `config.imageHosts` la imagen del CSV no se copia, pero queda una excepción que lo explica.
+    expect(p.media).toHaveLength(0);
+    const [skipped] = await db.select().from(supplierExceptions).where(eq(supplierExceptions.type, 'images_skipped'));
+    expect(skipped).toMatchObject({ supplierId: manual.id, data: { productId: p.id, images: [{ url: 'https://img.supplier.test/a.png' }] } });
+    // Con el host permitido en la config del proveedor, el import desde el panel sí la copia.
+    const withHosts = await upsertSupplier({ name: 'Acme 2', adapter: 'manual', currency: 'EUR', config: { imageHosts: 'img.supplier.test' } });
+    await action('import-csv').run(withHosts.id, { csv: csv.replaceAll('P1,', 'P9,').replace('V1,', 'V91,').replace('V2,', 'V92,').replaceAll('"LED lamp, warm"', '"LED lamp, cold"') }, ctx);
+    expect((await getProduct('led-lamp-cold', { includeDraft: true }))!.media).toHaveLength(1);
     await expect(action('import-csv').run(manual.id, { csv: 'title\nx' }, ctx)).rejects.toMatchObject({ code: 'invalid' });
     await expect(action('import-csv').run(manual.id, { csv }, { ...ctx, can: async () => false })).rejects.toMatchObject({ code: 'forbidden' });
   });
