@@ -85,7 +85,9 @@ async function accessToken(signal?: AbortSignal): Promise<string> {
 
 /** Coste en céntimos de USD redondeado hacia arriba: nunca se subestima lo que cobra el proveedor. */
 function usd(value: unknown): { amount: number; currency: string } {
-  const n = typeof value === 'number' ? value : Number(String(value ?? '').split('-')[0]);
+  // Un precio ausente o vacío no es 0: con coste 0 se vendería por debajo del coste real.
+  const text = typeof value === 'number' ? String(value) : String(value ?? '').split('-')[0]!.trim();
+  const n = text === '' ? Number.NaN : Number(text);
   if (!Number.isFinite(n) || n < 0) throw new CjApiError(0, `invalid price: ${String(value)}`);
   return { amount: Math.ceil(Math.round(n * 1e6) / 1e4), currency: 'USD' };
 }

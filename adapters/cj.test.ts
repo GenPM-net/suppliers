@@ -84,6 +84,9 @@ describe('CJdropshipping adapter', () => {
     handlers['GET /product/listV2'] = (c) => ok({ content: [{ productList: [{ id: 'P1', nameEn: `Hoodie for ${c.query.keyWord}`, bigImage: 'https://cf.cjdropshipping.com/a.jpg', sellPrice: '9.50-11.85' }] }] });
     expect(await cj.search!(supplier(), 'cats')).toEqual([{ externalProductId: 'P1', title: 'Hoodie for cats', image: 'https://cf.cjdropshipping.com/a.jpg', cost: { amount: 950, currency: 'USD' } }]);
     expect(calls.at(-1)!.query).toMatchObject({ keyWord: 'cats', page: '1', size: '20' });
+    // Sin precio no hay coste 0: es un error.
+    handlers['GET /product/listV2'] = () => ok({ content: [{ productList: [{ id: 'P2', nameEn: 'No price', sellPrice: '' }] }] });
+    await expect(cj.search!(supplier(), 'x')).rejects.toThrow(/invalid price/);
   });
 
   it('syncs variant by variant; a removed variant has unknown cost and no stock', async () => {
